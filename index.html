@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bubble Shooter Game by Aryan</title>
+
+<style>
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  background:linear-gradient(135deg,#080d25,#182c55,#090e20);
+  color:white;
+  font-family:Arial,sans-serif;
+  text-align:center;
+}
+
+header{
+  padding:15px 5px;
+  background:#101b3a;
+  box-shadow:0 3px 15px #0008;
+}
+
+h1{
+  font-size:23px;
+  margin:5px;
+  color:#65eaff;
+}
+
+.credit{
+  font-size:12px;
+  color:#aaa;
+}
+
+.stats{
+  display:flex;
+  justify-content:center;
+  gap:8px;
+  margin:12px 5px;
+}
+
+.box{
+  background:#1d315b;
+  border:1px solid #4569a5;
+  border-radius:10px;
+  padding:8px;
+  min-width:95px;
+  font-size:15px;
+}
+
+.box small{
+  display:block;
+  color:#a8c8ff;
+  font-size:10px;
+}
+
+canvas{
+  display:block;
+  width:min(96vw,420px);
+  height:auto;
+  margin:auto;
+  background:linear-gradient(#101d42,#172b53);
+  border:2px solid #5d8fff;
+  border-radius:14px;
+  touch-action:none;
+}
+
+.buttons{
+  display:flex;
+  justify-content:center;
+  flex-wrap:wrap;
+  gap:8px;
+  margin:12px;
+}
+
+button{
+  border:0;
+  border-radius:9px;
+  padding:11px 13px;
+  font-weight:bold;
+  background:#2879ed;
+  color:white;
+  font-size:13px;
+}
+
+button:active{
+  transform:scale(.94);
+}
+
+#nextLevel{
+  background:#08a96b;
+}
+
+.info{
+  font-size:12px;
+  color:#b9d0ff;
+  padding:8px;
+}
+
+#message{
+  color:#ffe66d;
+  font-weight:bold;
+  min-height:22px;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <h1>BUBBLE SHOOTER GAME BY ARYAN</h1>
+  <div class="credit">edited with kelvin</div>
+</header>
+
+<div class="stats">
+  <div class="box"><small>LEVEL</small><b id="level">1</b></div>
+  <div class="box"><small>SCORE</small><b id="score">0</b></div>
+  <div class="box"><small>BEST SCORE</small><b id="best">0</b></div>
+</div>
+
+<canvas id="game" width="420" height="650"></canvas>
+
+<div id="message">Press START to play!</div>
+
+<div class="buttons">
+  <button id="start">▶ START</button>
+  <button id="pause">⏸ PAUSE</button>
+  <button id="sound">🔊 SOUND ON</button>
+  <button id="restart">↻ RESTART</button>
+  <button id="nextLevel" style="display:none">NEXT LEVEL ➜</button>
+</div>
+
+<div class="info">
+  Aim by touching the screen and release to shoot.<br>
+  Match 3 or more bubbles of the same colour!
+</div>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+
+const W=420,H=650;
+const R=16;
+const STEP=34;
+const ROW_H=29.4;
+
+const COLORS=[
+ "#ff3b5c",
+ "#ffd43b",
+ "#38e7a1",
+ "#42a5ff",
+ "#bd65ff",
+ "#ff9b42"
+];
+
+let grid=[];
+let level=1;
+let score=0;
+let best=Number(localStorage.getItem("bubbleBest")||0);
+
+let current=0;
+let next=1;
+let projectile=null;
+let aim={x:210,y:300};
+
+let running=false;
+let paused=false;
+let gameOver=false;
+let levelComplete=false;
+let soundOn=true;
+
+let shots=0;
+let particles=[];
+let falling=[];
+let lastTime=0;
+let animationId=null;
+
+document.getElementById("best").textContent=best;
+
+const launcher={
+ x:W/2,
+ y:585
+};
+
+// SOUND SYSTEM
+let audio=null;
+let musicTimer=null;
+let musicIndex=0;
+
+function initAudio(){
+ if(!audio){
+  audio=new (window.AudioContext||window.webkitAudioContext)();
+ }
+ if(audio.state==="suspended") audio.resume();
+}
+
+function tone(freq,duration,type="sine",volume=.08){
+ if(!soundOn) return;
+
+ initAudio();
+
+ const osc=audio.createOscillator();
+ const gain=audio.createGain();
+
+ osc.type=type;
+ osc.frequency.value=freq;
+
+ gain.gain.setValueAtTime(volume,audio.currentTime);
+ gain.gain.exponentialRampToValueAtTime(
+  .001,audio.currentTime+duration
+ );
+
+ osc.connect(gain);
+ gain.connect(audio.destination);
+
+ osc.start();
+ osc.stop(audio.currentTime+duration);
+}
+
+function playShoot(){
+ tone(420,.09,"triangle");
+}
+
+function playPop(){
+ tone(650,.08,"sine");
+ setTimeout(()=>tone(850,.08,"sine"),50);
+}
+
+function playWin(){
+ tone(500,.15);
+ setTimeout(()=>tone(650,.15),150);
+ setTimeout(()=>tone(800,.25),300);
+}
+
+function playLose(){
+ tone(250,.3,"sawtooth");
+}
+
+function startMusic(){
+ if(!soundOn||musicTimer) return;
+
+ const notes=[262,330,392,330,294,349,440,349];
+
+ musicTimer=setInterval(()=>{
+  if(running&&!paused&&!gameOver&&!levelComplete){
+   tone(notes[musicIndex%notes.length],.22,"sine",.025);
+   musicIndex++;
+  }
+ },350);
+}
+
+function stopMusic(){
+ if(musicTimer){
+  clearInterval(musicTimer);
+  musicTimer=null;
+ }
+}
+
+// GRID
+function emptyGrid(){
+ grid=[];
+ for(let r=0;r<25;r++){
+  grid[r]=[];
+  for(let c=0;c<12;c++){
+   grid[r][c]=null;
+  }
+ }
+}
+
+function bubblePosition(row,col){
+ return {
+  x:17+col*STEP+(row%2)*17,
+  y:35+row*ROW_H
+ };
+}
+
+function randomColor(){
+ return Math.floor(Math.random()*COLORS.length);
+}
+
+function createGrid(){
+ emptyGrid();
+
+ const rows=Math.min(5+Math.floor(level/2),12);
+
+ for(let r=0;r<rows;r++){
+  for(let c=0;c<12;c++){
+   if(Math.random()>.08){
+    grid[r][c]=randomColor();
+   }
+  }
+ }
+
+ current=randomColor();
+ next=randomColor();
+ shots=0;
+}
+
+// NEIGHBOURS
+function getNeighbours(row,col){
+ const odd=row%2===1;
+
+ const list=[
+  [row,col-1],
+  [row,col+1],
+  [row-1,col+(odd?0:-1)],
+  [row-1,col+(odd?1:0)],
+  [row+1,col+(odd?0:-1)],
+  [row+1,col+(odd?1:0)]
+ ];
+
+ return list.filter(([r,c])=>
+  r>=0&&r<25&&c>=0&&c<12
+ );
+}
+
+function getGroup(row,col,color,visited=new Set()){
+ const key=row+","+col;
+
+ if(visited.has(key)) return [];
+
+ visited.add(key);
+
+ if(grid[row]?.[col]!==color) return [];
+
+ let group=[[row,col]];
+
+ for(const [r,c] of getNeighbours(row,col)){
+  if(grid[r][c]===color){
+   group=group.concat(
+    getGroup(r,c,color,visited)
+   );
+  }
+ }
+
+ return group;
+}
+
+// REMOVE DISCONNECTED BUBBLES
+function dropDisconnected(){
+ const visited=new Set();
+ const queue=[];
+
+ for(let c=0;c<12;c++){
+  if(grid[0][c]!==null){
+   queue.push([0,c]);
+  }
+ }
+
+ while(queue.length){
+  const [r,c]=queue.shift();
+  const key=r+","+c;
+
+  if(visited.has(key)) continue;
+  visited.add(key);
+
+  for(const [nr,nc] of getNeighbours(r,c)){
+   if(grid[nr][nc]!==null){
+    const k=nr+","+nc;
+    if(!visited.has(k)) queue.push([nr,nc]);
+   }
+  }
+ }
+
+ for(let r=0;r<25;r++){
+  for(let c=0;c<12;c++){
+   if(grid[r][c]!==null){
+    const key=r+","+c;
+
+    if(!visited.has(key)){
+     const p=bubblePosition(r,c);
+
+     falling.push({
+      x:p.x,
+      y:p.y,
+      color:grid[r][c],
+      vy:1
+     });
+
+     grid[r][c]=null;
+     score+=10;
+    }
+   }
+  }
+ }
+}
+
+// MATCH CHECK
+function checkMatches(row,col){
+ const color=grid[row][col];
+ if(color===null) return;
+
+ const group=getGroup(row,col,color);
+
+ if(group.length>=3){
+  group.forEach(([r,c])=>{
+   const p=bubblePosition(r,c);
+
+   for(let i=0;i<8;i++){
+    particles.push({
+     x:p.x,
+     y:p.y,
+     vx:(Math.random()-.5)*5,
+     vy:(Math.random()-.5)*5,
+     color:COLORS[color],
+     life:1
+    });
+   }
+
+   grid[r][c]=null;
+  });
+
+  score+=group.length*20;
+  playPop();
+
+  dropDisconnected();
+ }
+
+ updateStats();
+ checkWin();
+}
+
+// FIND NEAREST EMPTY CELL
+function findEmptyCell(x,y){
+ let bestCell=null;
+ let bestDistance=Infinity;
+
+ for(let r=0;r<25;r++){
+  for(let c=0;c<12;c++){
+   if(grid[r][c]===null){
+    const p=bubblePosition(r,c);
+    const d=Math.hypot(p.x-x,p.y-y);
+
+    if(d<bestDistance){
+     bestDistance=d;
+     bestCell={row:r,col:c};
+    }
+   }
+  }
+ }
+
+ return bestCell;
+}
+
+function attachBubble(){
+ if(!projectile) return;
+
+ const cell=findEmptyCell(projectile.x,projectile.y);
+
+ if(cell){
+  grid[cell.row][cell.col]=projectile.color;
+  checkMatches(cell.row,cell.col);
+ }
+
+ projectile=null;
+ current=next;
+ next=randomColor();
+
+ shots++;
+
+ if(shots>=8&&!levelComplete&&!gameOver){
+  addNewRow();
+  shots=0;
+ }
+}
+
+// ADD NEW ROW
+function addNewRow(){
+ for(let r=24;r>0;r--){
+  for(let c=0;c<12;c++){
+   grid[r][c]=grid[r-1][c];
+  }
+ }
+
+ for(let c=0;c<12;c++){
+  grid[0][c]=Math.random()>.1?randomColor():null;
+ }
+
+ checkGameOver();
+}
+
+// SHOOT
+function shoot(){
+ if(!running||paused||gameOver||levelComplete||projectile) return;
+
+ let dx=aim.x-launcher.x;
+ let dy=aim.y-launcher.y;
+
+ if(dy> -20) dy=-20;
+
+ const len=Math.hypot(dx,dy);
+
+ if(len===0) return;
+
+ // SHOOTING SPEED = 9
+ projectile={
+  x:launcher.x,
+  y:launcher.y,
+  vx:dx/len*9,
+  vy:dy/len*9,
+  color:current,
+  radius:R
+ };
+
+ playShoot();
+}
+
+// AIM
+function updateAim(x,y){
+ aim.x=x;
+ aim.y=y;
+
+ if(aim.y>launcher.y-20){
+  aim.y=launcher.y-20;
+ }
+}
+
+// POINTER CONTROLS
+let pointerDown=false;
+
+canvas.addEventListener("pointerdown",e=>{
+ if(!running||paused||gameOver||levelComplete) return;
+
+ pointerDown=true;
+
+ const rect=canvas.getBoundingClientRect();
+
+ const x=(e.clientX-rect.left)*(W/rect.width);
+ const y=(e.clientY-rect.top)*(H/rect.height);
+
+ updateAim(x,y);
+});
+
+canvas.addEventListener("pointermove",e=>{
+ if(!pointerDown) return;
+
+ const rect=canvas.getBoundingClientRect();
+
+ const x=(e.clientX-rect.left)*(W/rect.width);
+ const y=(e.clientY-rect.top)*(H/rect.height);
+
+ updateAim(x,y);
+});
+
+canvas.addEventListener("pointerup",()=>{
+ if(pointerDown){
+  shoot();
+ }
+ pointerDown=false;
+});
+
+canvas.addEventListener("pointercancel",()=>{
+ pointerDown=false;
+});
+
+// UPDATE GAME
+function update(dt){
+ const step=dt*60;
+
+ // PROJECTILE MOVEMENT
+ if(projectile){
+  projectile.x+=projectile.vx*step;
+  projectile.y+=projectile.vy*step;
+
+  // WALL BOUNCE
+  if(projectile.x<R){
+   projectile.x=R;
+   projectile.vx=Math.abs(projectile.vx);
+  }
+
+  if(projectile.x>W-R){
+   projectile.x=W-R;
+   projectile.vx=-Math.abs(projectile.vx);
+  }
+
+  // CEILING COLLISION
+  if(projectile.y<R+10){
+   attachBubble();
+  }
+
+  // BUBBLE COLLISION
+  if(projectile){
+   outer:
+   for(let r=0;r<25;r++){
+    for(let c=0;c<12;c++){
+     if(grid[r][c]!==null){
+      const p=bubblePosition(r,c);
+
+      const d=Math.hypot(
+       projectile.x-p.x,
+       projectile.y-p.y
+      );
+
+      if(d<R*2-2){
+       attachBubble();
+       break outer;
+      }
+     }
+    }
+   }
+  }
+ }
+
+ // FALLING BUBBLES
+ falling.forEach(b=>{
+  b.vy+=.25*step;
+  b.y+=b.vy*step;
+ });
+
+ falling=falling.filter(b=>b.y<H+50);
+
+ // PARTICLES
+ particles.forEach(p=>{
+  p.x+=p.vx*step;
+  p.y+=p.vy*step;
+  p.life-=.025*step;
+ });
+
+ particles=particles.filter(p=>p.life>0);
+}
+
+// DRAW BUBBLE
+function drawBubble(x,y,color,radius=R){
+ const c=COLORS[color];
+
+ const grad=ctx.createRadialGradient(
+  x-6,y-7,2,x,y,radius
+ );
+
+ grad.addColorStop(0,"#ffffff");
+ grad.addColorStop(.2,c);
+ grad.addColorStop(1,"#17233f");
+
+ ctx.beginPath();
+ ctx.arc(x,y,radius,0,Math.PI*2);
+ ctx.fillStyle=grad;
+ ctx.fill();
+
+ ctx.lineWidth=1.5;
+ ctx.strokeStyle="#ffffff99";
+ ctx.stroke();
+}
+
+// DRAW GAME
+function draw(){
+ ctx.clearRect(0,0,W,H);
+
+ // BACKGROUND DECORATION
+ ctx.fillStyle="#ffffff09";
+
+ for(let i=0;i<20;i++){
+  ctx.beginPath();
+  ctx.arc(
+   (i*73)%W,
+   (i*97)%H,
+   2,
+   0,
+   Math.PI*2
+  );
+  ctx.fill();
+ }
+
+ // GRID BUBBLES
+ for(let r=0;r<25;r++){
+  for(let c=0;c<12;c++){
+   if(grid[r][c]!==null){
+    const p=bubblePosition(r,c);
+    drawBubble(p.x,p.y,grid[r][c]);
+   }
+  }
+ }
+
+ // FALLING BUBBLES
+ falling.forEach(b=>{
+  drawBubble(b.x,b.y,b.color);
+ });
+
+ // PARTICLES
+ particles.forEach(p=>{
+  ctx.globalAlpha=Math.max(0,p.life);
+  ctx.beginPath();
+  ctx.arc(p.x,p.y,3,0,Math.PI*2);
+  ctx.fillStyle=p.color;
+  ctx.fill();
+  ctx.globalAlpha=1;
+ });
+
+ // AIM LINE
+ if(running&&!paused&&!gameOver&&!levelComplete&&!projectile){
+  let dx=aim.x-launcher.x;
+  let dy=aim.y-launcher.y;
+
+  if(dy>-20) dy=-20;
+
+  const len=Math.hypot(dx,dy)||1;
+
+  const vx=dx/len;
+  const vy=dy/len;
+
+  ctx.setLineDash([6,7]);
+  ctx.strokeStyle="#ffffff88";
+  ctx.lineWidth=2;
+
+  ctx.beginPath();
+  ctx.moveTo(launcher.x,launcher.y);
+
+  let x=launcher.x;
+  let y=launcher.y;
+
+  for(let i=0;i<25;i++){
+   x+=vx*10;
+   y+=vy*10;
+
+   if(x<R||x>W-R) break;
+  }
+
+  ctx.lineTo(x,y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+ }
+
+ // LAUNCHER
+ ctx.fillStyle="#d5e6ff";
+ ctx.beginPath();
+ ctx.arc(launcher.x,launcher.y,23,0,Math.PI*2);
+ ctx.fill();
+
+ ctx.fillStyle="#344e7a";
+ ctx.beginPath();
+ ctx.arc(launcher.x,launcher.y,17,0,Math.PI*2);
+ ctx.fill();
+
+ // CURRENT BUBBLE
+ if(!projectile){
+  drawBubble(launcher.x,launcher.y,current);
+ }
+
+ // PROJECTILE
+ if(projectile){
+  drawBubble(
+   projectile.x,
+   projectile.y,
+   projectile.color,
+   projectile.radius
+  );
+ }
+
+ // NEXT BUBBLE
+ ctx.fillStyle="white";
+ ctx.font="12px Arial";
+ ctx.fillText("NEXT",350,565);
+ drawBubble(375,590,next,13);
+
+ if(paused){
+  drawOverlay("PAUSED","Press RESUME to continue");
+ }
+
+ if(gameOver){
+  drawOverlay("GAME OVER","Press RESTART to play again");
+ }
+
+ if(levelComplete){
+  drawOverlay("LEVEL COMPLETE!","Press NEXT LEVEL");
+ }
+}
+
+function drawOverlay(title,subtitle){
+ ctx.fillStyle="#000b";
+ ctx.fillRect(0,0,W,H);
+
+ ctx.textAlign="center";
+ ctx.fillStyle="#ffe66d";
+ ctx.font="bold 30px Arial";
+ ctx.fillText(title,W/2,290);
+
+ ctx.fillStyle="white";
+ ctx.font="16px Arial";
+ ctx.fillText(subtitle,W/2,325);
+
+ ctx.textAlign="left";
+}
+
+// CHECK WIN
+function checkWin(){
+ let count=0;
+
+ for(let r=0;r<25;r++){
+  for(let c=0;c<12;c++){
+   if(grid[r][c]!==null) count++;
+  }
+ }
+
+ if(count===0){
+  levelComplete=true;
+  running=false;
+
+  document.getElementById("nextLevel").style.display="inline-block";
+  document.getElementById("message").textContent="Amazing! Level completed!";
+  playWin();
+ }
+}
+
+// CHECK GAME OVER
+function checkGameOver(){
+ for(let r=0;r<25;r++){
+  for(let c=0;c<12;c++){
+   if(grid[r][c]!==null){
+    const p=bubblePosition(r,c);
+
+    if(p.y>510){
+     gameOver=true;
+     running=false;
+     stopMusic();
+
+     document.getElementById("message").textContent="Game Over!";
+     playLose();
+     return;
+    }
+   }
+  }
+ }
+}
+
+// STATS
+function updateStats(){
+ document.getElementById("level").textContent=level;
+ document.getElementById("score").textContent=score;
+
+ if(score>best){
+  best=score;
+  localStorage.setItem("bubbleBest",best);
+ }
+
+ document.getElementById("best").textContent=best;
+}
+
+// GAME LOOP
+function loop(time){
+ if(!running||paused){
+  draw();
+  return;
+ }
+
+ const dt=Math.min((time-lastTime)/1000||0,0.035);
+ lastTime=time;
+
+ update(dt);
+ draw();
+
+ if(running&&!paused){
+  animationId=requestAnimationFrame(loop);
+ }
+}
+
+// START
+function startGame(){
+ initAudio();
+
+ if(gameOver||levelComplete) return;
+
+ running=true;
+ paused=false;
+
+ document.getElementById("message").textContent="Good luck!";
+ startMusic();
+
+ lastTime=performance.now();
+
+ if(animationId) cancelAnimationFrame(animationId);
+
+ animationId=requestAnimationFrame(loop);
+}
+
+// BUTTONS
+document.getElementById("start").onclick=()=>{
+ if(grid.length===0||gameOver||levelComplete){
+  level=1;
+  score=0;
+  gameOver=false;
+  levelComplete=false;
+  createGrid();
+  updateStats();
+ }
+
+ startGame();
+};
+
+document.getElementById("pause").onclick=()=>{
+ if(!running&&!paused) return;
+
+ if(!paused){
+  paused=true;
+  running=false;
+  document.getElementById("pause").textContent="▶ RESUME";
+  draw();
+ }else{
+  paused=false;
+  running=true;
+  document.getElementById("pause").textContent="⏸ PAUSE";
+  lastTime=performance.now();
+  startMusic();
+  animationId=requestAnimationFrame(loop);
+ }
+};
+
+document.getElementById("restart").onclick=()=>{
+ running=false;
+ paused=false;
+ gameOver=false;
+ levelComplete=false;
+
+ level=1;
+ score=0;
+ projectile=null;
+ particles=[];
+ falling=[];
+ shots=0;
+
+ document.getElementById("nextLevel").style.display="none";
+ document.getElementById("pause").textContent="⏸ PAUSE";
+ document.getElementById("message").textContent="New game started!";
+
+ createGrid();
+ updateStats();
+ draw();
+};
+
+document.getElementById("nextLevel").onclick=()=>{
+ level++;
+ gameOver=false;
+ levelComplete=false;
+ projectile=null;
+ particles=[];
+ falling=[];
+ shots=0;
+
+ document.getElementById("nextLevel").style.display="none";
+ document.getElementById("message").textContent="Level "+level;
+
+ createGrid();
+ updateStats();
+ startGame();
+};
+
+document.getElementById("sound").onclick=()=>{
+ soundOn=!soundOn;
+
+ document.getElementById("sound").textContent=
+  soundOn?"🔊 SOUND ON":"🔇 SOUND OFF";
+
+ if(soundOn){
+  initAudio();
+  startMusic();
+ }else{
+  stopMusic();
+ }
+};
+
+// INITIAL SCREEN
+createGrid();
+draw();
+updateStats();
+</script>
+
+</body>
+</html>
